@@ -1,7 +1,7 @@
 ## Common for all worker Types
 
 # The horde url
-horde_url: "https://aihorde.net"
+horde_url: "https://api.aipowergrid.io"
 
 # The api_key identifies a unique user in the horde
 # Visit https://stablehorde.net/register to create one before you can join
@@ -172,7 +172,7 @@ disable_disk_cache: false # Currently unused in reGen
 # The model name must match the name in the model reference, or be a magic constant.
 #
 models_to_load:
-  - "top 2"
+  - "AIPG_RED"
   #- "ALL MODELS"
   #- "TOP 3"
   #- "ALL SFW"
