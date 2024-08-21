@@ -6,6 +6,7 @@ import enum
 import json
 import multiprocessing
 import os
+import queue
 import random
 import sys
 import time
@@ -34,11 +35,11 @@ from horde_sdk.ai_horde_api import GENERATION_STATE
 from horde_sdk.ai_horde_api.ai_horde_clients import AIHordeAPIAsyncClientSession, AIHordeAPIAsyncSimpleClient
 from horde_sdk.ai_horde_api.apimodels import (
     FindUserRequest,
-    FindUserResponse,
     GenMetadataEntry,
     ImageGenerateJobPopRequest,
     ImageGenerateJobPopResponse,
     JobSubmitResponse,
+    UserDetailsResponse,
 )
 from horde_sdk.ai_horde_api.consts import KNOWN_UPSCALERS, METADATA_TYPE, METADATA_VALUE
 from horde_sdk.ai_horde_api.fields import JobID
@@ -51,7 +52,9 @@ from horde_worker_regen.bridge_data.data_model import reGenBridgeData
 from horde_worker_regen.bridge_data.load_config import BridgeDataLoader
 from horde_worker_regen.consts import (
     BRIDGE_CONFIG_FILENAME,
+    KNOWN_CONTROLNET_WORKFLOWS,
     KNOWN_SLOW_MODELS_DIFFICULTIES,
+    KNOWN_SLOW_WORKFLOWS,
     MAX_SOURCE_IMAGE_RETRIES,
     VRAM_HEAVY_MODELS,
 )
@@ -197,11 +200,13 @@ class HordeProcessInfo:
         """
         return (
             self.last_process_state == HordeProcessState.INFERENCE_STARTING
+            or self.last_control_flag == HordeControlFlag.START_INFERENCE
             or self.last_process_state == HordeProcessState.INFERENCE_POST_PROCESSING
             or self.last_process_state == HordeProcessState.ALCHEMY_STARTING
             or self.last_process_state == HordeProcessState.DOWNLOADING_MODEL
             or self.last_process_state == HordeProcessState.DOWNLOADING_AUX_MODEL
             or self.last_process_state == HordeProcessState.PRELOADING_MODEL
+            or self.last_control_flag == HordeControlFlag.PRELOAD_MODEL
             or self.last_process_state == HordeProcessState.JOB_RECEIVED
             or self.last_process_state == HordeProcessState.EVALUATING_SAFETY
             or self.last_process_state == HordeProcessState.PROCESS_STARTING
@@ -211,10 +216,7 @@ class HordeProcessInfo:
         """Return true if the process is alive."""
         if not self.mp_process.is_alive():
             return False
-        if self.last_process_state == HordeProcessState.PROCESS_ENDING or HordeProcessState.PROCESS_ENDED:
-            return False
-
-        return True
+        return not (self.last_process_state == HordeProcessState.PROCESS_ENDING or HordeProcessState.PROCESS_ENDED)
 
     def safe_send_message(self, message: HordeControlMessage) -> bool:
         """Send a message to the process.
@@ -458,12 +460,10 @@ class ProcessMap(dict[int, HordeProcessInfo]):
             return False
         if self[process_id].heartbeats_inference_steps == 0:
             return False
-        if (
+        return bool(
             self[process_id].last_heartbeat_type == HordeHeartbeatType.INFERENCE_STEP
-            and (time.time() - self[process_id].last_heartbeat_timestamp) > 45
-        ):
-            return True
-        return False
+            and time.time() - self[process_id].last_heartbeat_timestamp > 45,
+        )
 
     def num_inference_processes(self) -> int:
         """Return the number of inference processes."""
@@ -481,7 +481,11 @@ class ProcessMap(dict[int, HordeProcessInfo]):
                 count += 1
         return count
 
-    def keep_single_inference(self) -> bool:
+    def keep_single_inference(
+        self,
+        *,
+        stable_diffusion_model_reference: StableDiffusion_ModelReference,
+    ) -> bool:
         """Return true if we should keep only a single inference process running.
 
         This is used to prevent overloading the system with inference processes, such as with batched jobs.
@@ -498,6 +502,31 @@ class ProcessMap(dict[int, HordeProcessInfo]):
                 and p.last_job_referenced.model in VRAM_HEAVY_MODELS
             ):
                 return True
+
+            if (
+                p.last_job_referenced is not None
+                and p.last_job_referenced.payload.workflow in KNOWN_CONTROLNET_WORKFLOWS
+            ):
+                model = p.last_job_referenced.model
+                if model is None:
+                    logger.error(
+                        f"Model is None for process {p.process_id} but workflow is "
+                        f"{p.last_job_referenced.payload.workflow}",
+                    )
+                    continue
+
+                model_info = stable_diffusion_model_reference.root.get(model)
+                if model_info is None:
+                    logger.debug(f"Model {model} not found in stable diffusion model reference. Is it a custom model?")
+                    continue
+
+                if model_info.baseline == STABLE_DIFFUSION_BASELINE_CATEGORY.stable_diffusion_xl and (
+                    p.can_accept_job()
+                    or p.last_process_state == HordeProcessState.PRELOADING_MODEL
+                    or p.last_process_state == HordeProcessState.INFERENCE_POST_PROCESSING
+                ):
+                    return True
+
             if p.batch_amount == 1:
                 continue
             if (
@@ -820,7 +849,7 @@ class LRUCache:
             capacity: The maximum number of elements that the cache can hold.
         """
         self.capacity = capacity
-        self.cache: "collections.OrderedDict[str, ModelInfo | None]" = collections.OrderedDict()
+        self.cache: collections.OrderedDict[str, ModelInfo | None] = collections.OrderedDict()
 
     def append(self, key: str) -> object:
         """Adds an element to the LRU cache, and potentially bumps one from the cache.
@@ -923,7 +952,7 @@ class HordeWorkerProcessManager:
     horde_client: AIHordeAPIAsyncSimpleClient
     horde_client_session: AIHordeAPIAsyncClientSession
 
-    user_info: FindUserResponse | None = None
+    user_info: UserDetailsResponse | None = None
     """The user info for the user that this worker is logged in as."""
     _last_user_info_fetch_time: float = 0
     """The time at which the user info was last fetched."""
@@ -973,6 +1002,8 @@ class HordeWorkerProcessManager:
 
     _lru: LRUCache
 
+    _amd_gpu: bool
+
     def __init__(
         self,
         *,
@@ -983,6 +1014,7 @@ class HordeWorkerProcessManager:
         target_vram_overhead_bytes_map: Mapping[int, int] | None = None,  # FIXME
         max_safety_processes: int = 1,
         max_download_processes: int = 1,
+        amd_gpu: bool = False,
     ) -> None:
         """Initialise the process manager.
 
@@ -998,6 +1030,7 @@ class HordeWorkerProcessManager:
                 Defaults to 1.
             max_download_processes (int, optional): The maximum number of download processes that can run at once. \
                 Defaults to 1.
+            amd_gpu (bool, optional): Whether or not the GPU is an AMD GPU. Defaults to False.
         """
         self.session_start_time = time.time()
 
@@ -1017,6 +1050,8 @@ class HordeWorkerProcessManager:
 
         self.max_inference_processes = self.bridge_data.queue_size + self.bridge_data.max_threads
         self._lru = LRUCache(self.max_inference_processes)
+
+        self._amd_gpu = amd_gpu
 
         # If there is only one model to load and only one inference process, then we can only run one job at a time
         # and there is no point in having more than one inference process
@@ -1045,6 +1080,15 @@ class HordeWorkerProcessManager:
         self.target_ram_overhead_bytes = min(int(self.total_ram_bytes / 2), 9)
 
         if any(model in VRAM_HEAVY_MODELS for model in self.bridge_data.image_models_to_load):
+            # If the system ram is less than 24GB, then we're going to exit with an error
+            if self.total_ram_bytes < (24 * 1024 * 1024 * 1024):
+                raise ValueError(
+                    "VRAM heavy models detected. Total RAM is less than 24GB. "
+                    "This is not enough RAM to run the worker."
+                    "Disable `Stable Cascade 1.0` by adding it to your `models_to_skip` or remove it from your "
+                    "`models_to_load`.",
+                )
+
             self.target_ram_overhead_bytes = min(self.target_ram_overhead_bytes, int(20 * 1024 * 1024 * 1024 / 2))
             logger.warning(
                 "VRAM heavy models detected. Target RAM overhead set to 20GB. "
@@ -1054,7 +1098,7 @@ class HordeWorkerProcessManager:
         if self.target_ram_overhead_bytes > self.total_ram_bytes:
             raise ValueError(
                 f"target_ram_overhead_bytes ({self.target_ram_overhead_bytes}) is greater than "
-                "total_ram_bytes ({self.total_ram_bytes})",
+                f"total_ram_bytes ({self.total_ram_bytes})",
             )
 
         self._status_message_frequency = bridge_data.stats_output_frequency
@@ -1226,6 +1270,10 @@ class HordeWorkerProcessManager:
                     self._disk_lock,
                     cpu_only,
                 ),
+                kwargs={
+                    "high_memory_mode": self.bridge_data.high_memory_mode,
+                    "amd_gpu": self._amd_gpu,
+                },
             )
 
             process.start()
@@ -1283,7 +1331,10 @@ class HordeWorkerProcessManager:
                 self._disk_lock,
                 self._aux_model_lock,
             ),
-            kwargs={"high_memory_mode": self.bridge_data.high_memory_mode},
+            kwargs={
+                "high_memory_mode": self.bridge_data.high_memory_mode,
+                "amd_gpu": self._amd_gpu,
+            },
         )
         process.start()
         # Add the process to the process map
@@ -1439,7 +1490,11 @@ class HordeWorkerProcessManager:
         """
         # We want to completely flush the queue, to maximize the chances we get the most up to date information
         while not self._process_message_queue.empty():
-            message: HordeProcessMessage = self._process_message_queue.get()
+            try:
+                message: HordeProcessMessage = self._process_message_queue.get(block=False)
+            except queue.Empty:
+                logger.debug("Queue was empty, breaking")
+                break
 
             self._in_deadlock = False
 
@@ -1450,7 +1505,7 @@ class HordeWorkerProcessManager:
                 )
             else:
                 logger.debug(
-                    f"Received {type(message).__name__} from process {message.process_id}:",
+                    f"Received {type(message).__name__} from process {message.process_id}: {message.info}",
                     # f"{message.model_dump(exclude={'job_result_images_base64', 'replacement_image_base64'})}",
                 )
 
@@ -1584,6 +1639,17 @@ class HordeWorkerProcessManager:
                     logger.error(
                         f"Job {message.sdk_api_job_info.id_} not found in jobs_lookup. (Process {message.process_id})",
                     )
+                    if message.sdk_api_job_info in self.jobs_in_progress:
+                        logger.error(
+                            f"Job {message.sdk_api_job_info.id_} found in jobs_in_progress. "
+                            f"(Process {message.process_id})",
+                        )
+                        self.jobs_in_progress.remove(message.sdk_api_job_info)
+                    if message.sdk_api_job_info in self.job_deque:
+                        logger.error(
+                            f"Job {message.sdk_api_job_info.id_} found in job_deque. (Process {message.process_id})",
+                        )
+                        self.job_deque.remove(message.sdk_api_job_info)
                     continue
 
                 job_info = self.jobs_lookup[message.sdk_api_job_info]
@@ -1731,7 +1797,7 @@ class HordeWorkerProcessManager:
             if job.model is None:
                 raise ValueError(f"job.model is None ({job})")
 
-            if len(job.payload.loras) > 0:
+            if job.payload.loras is not None and len(job.payload.loras) > 0:
                 for p in self._process_map.values():
                     if (
                         p.loaded_horde_model_name == job.model
@@ -1786,7 +1852,12 @@ class HordeWorkerProcessManager:
 
             logger.debug(f"Preloading model {job.model} on process {available_process.process_id}")
             logger.debug(f"Available inference processes: {self._process_map}")
-            logger.debug(f"Horde model map: {self._horde_model_map}")
+            only_active_models = {
+                model_name: model_info
+                for model_name, model_info in self._horde_model_map.root.items()
+                if model_info.horde_model_load_state.is_active()
+            }
+            logger.debug(f"Horde model map (active): {only_active_models}")
 
             will_load_loras = job.payload.loras is not None and len(job.payload.loras) > 0
             seamless_tiling_enabled = job.payload.tiling is not None and job.payload.tiling
@@ -1867,6 +1938,10 @@ class HordeWorkerProcessManager:
             if job.model is not None:
                 logger.debug(f"Expiring entry for model {job.model}")
                 self._horde_model_map.expire_entry(job.model)
+                try:
+                    self.jobs_in_progress.remove(job)
+                except ValueError:
+                    logger.error(f"Job {job.id_} not found in jobs_in_progress.")
 
         if self._horde_model_map.is_model_loaded(next_job.model):
             if process_with_model is None:
@@ -1883,7 +1958,8 @@ class HordeWorkerProcessManager:
 
             if not process_with_model.can_accept_job():
                 if process_with_model.last_process_state == HordeProcessState.DOWNLOADING_AUX_MODEL or (
-                    process_with_model.last_process_state == HordeProcessState.INFERENCE_POST_PROCESSING
+                    self.bridge_data.post_process_job_overlap
+                    and process_with_model.last_process_state == HordeProcessState.INFERENCE_POST_PROCESSING
                     and (self.bridge_data.high_performance_mode or self.bridge_data.moderate_performance_mode)
                 ):
                     # If any of the next n jobs (other than this one) aren't using the same model, see if that job
@@ -1939,7 +2015,11 @@ class HordeWorkerProcessManager:
             )
 
         processes_post_processing = 0
-        if self.bridge_data.moderate_performance_mode or self.bridge_data.high_performance_mode:
+        if (
+            self.bridge_data.post_process_job_overlap
+            and self.bridge_data.moderate_performance_mode
+            or self.bridge_data.high_performance_mode
+        ):
             processes_post_processing = self._process_map.num_busy_with_post_processing()
 
         if processes_post_processing > 0 and len(self.jobs_in_progress) >= self.max_concurrent_inference_processes:
@@ -2007,6 +2087,11 @@ class HordeWorkerProcessManager:
             if extra_info:
                 extra_info += ", "
             extra_info += "HiRes fix"
+
+        if next_job.payload.workflow is not None:
+            if extra_info:
+                extra_info += ", "
+            extra_info += f"Workflow: {next_job.payload.workflow}"
 
         if extra_info:
             logger.info(extra_info)
@@ -2189,6 +2274,10 @@ class HordeWorkerProcessManager:
         if completed_job_info.sdk_api_job_info.model is None:
             raise ValueError("completed_job_info.sdk_api_job_info.model is None")
 
+        # Custom models don't appear in the downloaded model reference
+        model_info = {}
+        if completed_job_info.sdk_api_job_info.model in self.stable_diffusion_reference.root:
+            model_info = self.stable_diffusion_reference.root[completed_job_info.sdk_api_job_info.model].model_dump()
         safety_message_sent_succeeded = safety_process.safe_send_message(
             HordeSafetyControlMessage(
                 control_flag=HordeControlFlag.EVALUATE_SAFETY,
@@ -2197,9 +2286,7 @@ class HordeWorkerProcessManager:
                 prompt=completed_job_info.sdk_api_job_info.payload.prompt,
                 censor_nsfw=completed_job_info.sdk_api_job_info.payload.use_nsfw_censor,
                 sfw_worker=not self.bridge_data.nsfw,
-                horde_model_info=self.stable_diffusion_reference.root[
-                    completed_job_info.sdk_api_job_info.model
-                ].model_dump(),
+                horde_model_info=model_info,
                 # TODO: update this to use a class instead of a dict?
             ),
         )
@@ -2344,8 +2431,12 @@ class HordeWorkerProcessManager:
                 ),
                 timeout=10 + 1,
             )
-        except TimeoutError:
+        except _async_client_exceptions:
             logger.error(f"Job {new_submit.job_id} submission timed out")
+            new_submit.retry()
+            return new_submit
+        except Exception as e:
+            logger.error(f"Failed to submit job {new_submit.job_id}: {e}")
             new_submit.retry()
             return new_submit
 
@@ -2569,7 +2660,7 @@ class HordeWorkerProcessManager:
                         f"Job {completed_job_info.sdk_api_job_info.id_} not found in jobs_lookup "
                         "during submit. Creating a new HordeJobInfo object.",
                     )
-
+                # TODO: Too much indent. Split into own method
                 if self.bridge_data.capture_kudos_training_data:
                     if self.bridge_data.kudos_training_data_file is None:
                         self.bridge_data.kudos_training_data_file = "kudos_training_data.json"
@@ -2602,56 +2693,73 @@ class HordeWorkerProcessManager:
                                     f"Job {completed_job_info.sdk_api_job_info.id_} not found in jobs_lookup "
                                     " during kudos training data capture.",
                                 )
-                            model_dump = hji.model_dump(
-                                exclude=_excludes_for_job_dump,
-                            )
-                            if self.stable_diffusion_reference is not None and hji.sdk_api_job_info.model is not None:
-                                model_dump["sdk_api_job_info"]["model_baseline"] = (
-                                    self.stable_diffusion_reference.root[hji.sdk_api_job_info.model].baseline
+                            if (
+                                self.stable_diffusion_reference is not None
+                                and hji.sdk_api_job_info.model is not None
+                                and hji.sdk_api_job_info.model in self.stable_diffusion_reference.root
+                            ):
+
+                                model_dump = hji.model_dump(
+                                    exclude=_excludes_for_job_dump,
                                 )
-                            # Preparation for multiple schedulers
-                            if hji.sdk_api_job_info.payload.karras:
-                                model_dump["sdk_api_job_info"]["payload"]["scheduler"] = "karras"
-                            else:
-                                model_dump["sdk_api_job_info"]["payload"]["scheduler"] = "simple"
-                            del model_dump["sdk_api_job_info"]["payload"]["karras"]
-                            model_dump["sdk_api_job_info"]["payload"]["lora_count"] = len(
-                                model_dump["sdk_api_job_info"]["payload"]["loras"],
-                            )
-                            model_dump["sdk_api_job_info"]["payload"]["ti_count"] = len(
-                                model_dump["sdk_api_job_info"]["payload"]["tis"],
-                            )
-                            model_dump["sdk_api_job_info"]["extra_source_images_count"] = (
-                                len(hji.sdk_api_job_info.extra_source_images)
-                                if hji.sdk_api_job_info.extra_source_images
-                                else 0
-                            )
-                            esi_combined_size = 0
-                            if hji.sdk_api_job_info.extra_source_images:
-                                for esi in hji.sdk_api_job_info.extra_source_images:
-                                    esi_combined_size += len(esi.image)
-                            model_dump["sdk_api_job_info"]["extra_source_images_combined_size"] = esi_combined_size
-                            model_dump["sdk_api_job_info"]["source_image_size"] = (
-                                len(hji.sdk_api_job_info.source_image) if hji.sdk_api_job_info.source_image else 0
-                            )
-                            model_dump["sdk_api_job_info"]["source_mask_size"] = (
-                                len(hji.sdk_api_job_info.source_mask) if hji.sdk_api_job_info.source_mask else 0
-                            )
-                            if not os.path.exists(file_name_to_use):
-                                with open(file_name_to_use, "w") as f:
-                                    json.dump([model_dump], f, indent=4)
-                            elif hji.sdk_api_job_info.payload.n_iter == 1:
-                                data = []
-                                with open(file_name_to_use) as f:
-                                    data = json.load(f)
-                                    if not isinstance(data, list):
-                                        logger.warning(
-                                            f"Kudos training data file {file_name_to_use} " "is not a list",
-                                        )
-                                        data = []
-                                data.append(model_dump)
-                                with open(file_name_to_use, "w") as f:
-                                    json.dump(data, f, indent=4)
+                                if (
+                                    self.stable_diffusion_reference is not None
+                                    and hji.sdk_api_job_info.model is not None
+                                ):
+                                    model_dump["sdk_api_job_info"]["model_baseline"] = (
+                                        self.stable_diffusion_reference.root[hji.sdk_api_job_info.model].baseline
+                                    )
+                                # Preparation for multiple schedulers
+                                if hji.sdk_api_job_info.payload.karras:
+                                    model_dump["sdk_api_job_info"]["payload"]["scheduler"] = "karras"
+                                else:
+                                    model_dump["sdk_api_job_info"]["payload"]["scheduler"] = "simple"
+                                del model_dump["sdk_api_job_info"]["payload"]["karras"]
+                                model_dump["sdk_api_job_info"]["payload"]["lora_count"] = (
+                                    len(
+                                        model_dump["sdk_api_job_info"]["payload"]["loras"],
+                                    )
+                                    if model_dump["sdk_api_job_info"]["payload"]["loras"]
+                                    else 0
+                                )
+                                model_dump["sdk_api_job_info"]["payload"]["ti_count"] = (
+                                    len(
+                                        model_dump["sdk_api_job_info"]["payload"]["tis"],
+                                    )
+                                    if model_dump["sdk_api_job_info"]["payload"]["tis"]
+                                    else 0
+                                )
+                                model_dump["sdk_api_job_info"]["extra_source_images_count"] = (
+                                    len(hji.sdk_api_job_info.extra_source_images)
+                                    if hji.sdk_api_job_info.extra_source_images
+                                    else 0
+                                )
+                                esi_combined_size = 0
+                                if hji.sdk_api_job_info.extra_source_images:
+                                    for esi in hji.sdk_api_job_info.extra_source_images:
+                                        esi_combined_size += len(esi.image)
+                                model_dump["sdk_api_job_info"]["extra_source_images_combined_size"] = esi_combined_size
+                                model_dump["sdk_api_job_info"]["source_image_size"] = (
+                                    len(hji.sdk_api_job_info.source_image) if hji.sdk_api_job_info.source_image else 0
+                                )
+                                model_dump["sdk_api_job_info"]["source_mask_size"] = (
+                                    len(hji.sdk_api_job_info.source_mask) if hji.sdk_api_job_info.source_mask else 0
+                                )
+                                if not os.path.exists(file_name_to_use):
+                                    with open(file_name_to_use, "w") as f:
+                                        json.dump([model_dump], f, indent=4)
+                                elif hji.sdk_api_job_info.payload.n_iter == 1:
+                                    data = []
+                                    with open(file_name_to_use) as f:
+                                        data = json.load(f)
+                                        if not isinstance(data, list):
+                                            logger.warning(
+                                                f"Kudos training data file {file_name_to_use} " "is not a list",
+                                            )
+                                            data = []
+                                    data.append(model_dump)
+                                    with open(file_name_to_use, "w") as f:
+                                        json.dump(data, f, indent=4)
                     except Exception as e:
                         logger.error(
                             f"Failed to write kudos training data for job {completed_job_info.sdk_api_job_info.id_} "
@@ -2772,7 +2880,9 @@ class HordeWorkerProcessManager:
         # Each extra batched image increases our difficulty by 20%
         batching_multiplier = 1 + ((job.payload.n_iter - 1) * 0.2)
 
-        lora_adjustment = 4 * 1_000_000 if len(job.payload.loras) > 0 else 0
+        lora_adjustment = 0
+        if job.payload.loras is not None:
+            lora_adjustment = 4 * 1_000_000 if len(job.payload.loras) > 0 else 0
 
         hires_fix_adjustment = 0
 
@@ -2795,6 +2905,14 @@ class HordeWorkerProcessManager:
         if job.model in KNOWN_SLOW_MODELS_DIFFICULTIES:
             job_effective_pixel_steps *= KNOWN_SLOW_MODELS_DIFFICULTIES[job.model]
 
+        # We treat slow workflows add extra slowdowns (as they might perform many more steps of inference)
+        if job.payload.workflow in KNOWN_SLOW_WORKFLOWS:
+            job_effective_pixel_steps *= KNOWN_SLOW_WORKFLOWS[job.payload.workflow]
+
+        # Some workflows by default require controlnets, but the user doesn't have to specify them.
+        # In this case, we use this to know when we have SDXL workflows, as they can double the VRAM usage
+        if job.payload.workflow in KNOWN_CONTROLNET_WORKFLOWS:
+            job_effective_pixel_steps *= 2
         return int(job_effective_pixel_steps / 1_000_000)
 
     def get_pending_megapixelsteps(self) -> int:
@@ -2952,6 +3070,7 @@ class HordeWorkerProcessManager:
 
     _last_pop_no_jobs_available: bool = False
 
+    @logger.catch(reraise=True)
     async def api_job_pop(self) -> None:
         """If the job deque is not full, add any jobs that are available to the job deque."""
         if self._shutting_down:
@@ -3019,7 +3138,10 @@ class HordeWorkerProcessManager:
             if self._triggered_max_pending_megapixelsteps is False:
                 self._triggered_max_pending_megapixelsteps = True
                 self._triggered_max_pending_megapixelsteps_time = time.time()
-                logger.info("Pausing job pops so some long running jobs can make some progress.")
+                logger.info(
+                    f"Pausing job pops for {round(seconds_to_wait, 2)} seconds so some long running jobs can make "
+                    "some progress.",
+                )
                 logger.debug(
                     f"Paused job pops for pending megapixelsteps to decrease below {self._max_pending_megapixelsteps}",
                 )
@@ -3107,6 +3229,7 @@ class HordeWorkerProcessManager:
                 name=self.bridge_data.dreamer_worker_name,
                 bridge_agent=f"AI Horde Worker reGen:{horde_worker_regen.__version__}:https://github.com/Haidra-Org/horde-worker-reGen",
                 models=list(models),
+                blacklist=self.bridge_data.blacklist,
                 nsfw=self.bridge_data.nsfw,
                 threads=self.max_concurrent_inference_processes,
                 max_pixels=self.bridge_data.max_power * 8 * 64 * 64,
@@ -3116,6 +3239,7 @@ class HordeWorkerProcessManager:
                 allow_unsafe_ipaddr=self.bridge_data.allow_unsafe_ip,
                 allow_post_processing=self.bridge_data.allow_post_processing,
                 allow_controlnet=self.bridge_data.allow_controlnet,
+                allow_sdxl_controlnet=self.bridge_data.allow_sdxl_controlnet,
                 allow_lora=self.bridge_data.allow_lora,
                 amount=self.bridge_data.max_batch,
             )
@@ -3225,7 +3349,7 @@ class HordeWorkerProcessManager:
 
         request = FindUserRequest(apikey=self.bridge_data.api_key)
         try:
-            response = await self.horde_client_session.submit_request(request, FindUserResponse)
+            response = await self.horde_client_session.submit_request(request, UserDetailsResponse)
             if isinstance(response, RequestErrorResponse):
                 logger.error(f"Failed to get user info (API Error): {response}")
                 self._user_info_failed = True
@@ -3362,10 +3486,29 @@ class HordeWorkerProcessManager:
                             # So long as we didn't preload a model this cycle, we can start inference
                             # We want to get any messages next cycle from preloading processes to make sure
                             # the state of everything is up to date
-
                             if not self.preload_models():
                                 next_job_and_process = self.get_next_job_and_process()
-                                if self._process_map.keep_single_inference():
+
+                                next_job_heavy_model_and_workflow = False
+                                if next_job_and_process is not None:
+                                    next_model = next_job_and_process.next_job.model
+                                    if next_model is not None:
+                                        next_model_baseline = self.stable_diffusion_reference.root.get(next_model)
+                                        next_workflow = next_job_and_process.next_job.payload.workflow
+
+                                        next_job_heavy_model_and_workflow = (
+                                            next_model_baseline is not None
+                                            and next_model_baseline
+                                            == STABLE_DIFFUSION_BASELINE_CATEGORY.stable_diffusion_xl
+                                            and next_workflow in KNOWN_SLOW_WORKFLOWS
+                                        )
+
+                                if (
+                                    self._process_map.keep_single_inference(
+                                        stable_diffusion_model_reference=self.stable_diffusion_reference,
+                                    )
+                                    and len(self.jobs_in_progress) > 0
+                                ):
                                     if self.has_queued_jobs() and time.time() - self._batch_wait_log_time > 10:
                                         logger.info(
                                             "Blocking further inference because batch or slow_model inference "
@@ -3375,7 +3518,10 @@ class HordeWorkerProcessManager:
 
                                 elif (
                                     next_job_and_process is not None
-                                    and next_job_and_process.next_job.payload.n_iter > 1
+                                    and (
+                                        next_job_and_process.next_job.payload.n_iter > 1
+                                        or next_job_heavy_model_and_workflow
+                                    )
                                     and self._process_map.num_busy_with_inference() > 0
                                     and (time.time() - self._batch_wait_log_time > 10)
                                 ):
@@ -3444,9 +3590,14 @@ class HordeWorkerProcessManager:
 
     def detect_deadlock(self) -> None:
         """Detect if there are jobs in the queue but no processes doing anything."""
-        if (not self._in_deadlock) and len(self.job_deque) > 0 and self._process_map.num_busy_processes() == 0:
+        if (
+            (not self._in_deadlock)
+            and (len(self.job_deque) > 0 or len(self.jobs_in_progress) > 0 or len(self.jobs_lookup) > 0)
+            and self._process_map.num_busy_processes() == 0
+        ):
             self._last_deadlock_detected_time = time.time()
             self._in_deadlock = True
+            logger.debug("Deadlock detected")
             logger.debug(f"Jobs in queue: {len(self.job_deque)}")
             logger.debug(f"Jobs in progress: {len(self.jobs_in_progress)}")
             logger.debug(f"Jobs pending safety check: {len(self.jobs_pending_safety_check)}")
@@ -3455,17 +3606,18 @@ class HordeWorkerProcessManager:
             logger.debug(f"Jobs faulted: {self._num_jobs_faulted}")
         elif (
             self._in_deadlock
-            and (self._last_deadlock_detected_time + 5) < time.time()
+            and (self._last_deadlock_detected_time + 10) < time.time()
             and self._process_map.num_busy_processes() == 0
         ):
-            logger.debug("Deadlock still detected after 5 seconds. Attempting to recover.")
-            self.jobs_in_progress.clear()
+            logger.debug("Deadlock still detected after 10 seconds. Attempting to recover.")
+            self._cleanup_jobs()
             self._in_deadlock = False
         elif (
             self._in_deadlock
             and (self._last_deadlock_detected_time + 5) < time.time()
             and self._process_map.num_busy_processes() > 0
         ):
+            logger.debug("Deadlock was likely false-alarm. Ignoring.")
             self._in_deadlock = False
 
     def print_status_method(self) -> None:
@@ -3493,9 +3645,11 @@ class HordeWorkerProcessManager:
                         f"allow_img2img: {self.bridge_data.allow_img2img}",
                         f"allow_lora: {self.bridge_data.allow_lora}",
                         f"allow_controlnet: {self.bridge_data.allow_controlnet}",
+                        f"allow_sdxl_controlnet: {self.bridge_data.allow_sdxl_controlnet}",
                         f"allow_post_processing: {self.bridge_data.allow_post_processing}",
-                        f"jobs_pending_safety_check: {len(self.jobs_pending_safety_check)}"
+                        f"jobs_pending_safety_check: {len(self.jobs_pending_safety_check)}",
                         f"jobs_being_safety_checked: {len(self.jobs_being_safety_checked)}",
+                        f"jobs_in_progress: {len(self.jobs_in_progress)}",
                     ],
                 ),
             )
@@ -3732,7 +3886,10 @@ class HordeWorkerProcessManager:
 
         if time_elapsed > timeout and process_info.last_process_state == state:
             logger.error(f"{process_info} {error_message}, replacing it")
-            self._replace_inference_process(process_info)
+            if process_info.process_type == HordeProcessType.SAFETY:
+                self._replace_all_safety_process()
+            if process_info.process_type == HordeProcessType.INFERENCE:
+                self._replace_inference_process(process_info)
             return True
         return False
 

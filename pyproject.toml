@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "horde_worker_regen"
-version = "5.0.2"
+version = "8.1.2"
 description = "Allows you to connect to the AI Horde and generate images for users."
 authors = [
     {name = "tazlin", email = "tazlin.on.github@gmail.com"},
@@ -75,7 +75,7 @@ lint.ignore = [
   "D408",
   "D409",
   "D413",]
-extend-exclude = ["conda", "model-stats.py"]
+extend-exclude = ["conda", "model-stats.py", "amd_go_fast.py"]
 
 [tool.ruff.lint.per-file-ignores]
 "download_models.py" = ["E402"]
@@ -104,6 +104,7 @@ exclude = '''
  | clip_blip
  | hf_transformers
  | horde_model_reference
+ | amd_go_fast.py
 )/
 '''
 
