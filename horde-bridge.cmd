@@ -9,16 +9,12 @@ if "%AI_HORDE_URL%"=="" (
     echo AI_HORDE_URL is already set to %AI_HORDE_URL%
 )
 
-:: Ask for GPU selection
-echo Select which GPU to use by index (e.g., 0, 1, 2...):
-set /p GPU_INDEX="Enter GPU index: "
-set CUDA_VISIBLE_DEVICES=%GPU_INDEX%
-echo Using GPU %CUDA_VISIBLE_DEVICES%
-
 : This first call to runtime activates the environment for the rest of the script
 call runtime python -s -m pip -V
 
-call python -s -m pip install horde_sdk~=0.9.3 horde_model_reference~=0.6.3 hordelib~=2.8.1 -U
+call python -s -m pip uninstall hordelib
+call python -s -m pip install horde_sdk~=0.14.0 horde_model_reference~=0.8.1 horde_engine~=2.13.3 horde_safety~=0.2.3 -U
+
 if %ERRORLEVEL% NEQ 0 (
     echo "Please run update-runtime.cmd."
     GOTO END
@@ -27,7 +23,6 @@ if %ERRORLEVEL% NEQ 0 (
 :: Change constants in path_consts.py
 echo Modifying path_consts.py to update repository details...
 call python update_path_consts.py
-
 
 call python -s -m pip check
 if %ERRORLEVEL% NEQ 0 (

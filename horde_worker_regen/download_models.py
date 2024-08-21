@@ -34,6 +34,7 @@ def download_all_models(
                 horde_model_reference_manager=horde_model_reference_manager,
             )
             bridge_data.load_env_vars()
+            bridge_data.prepare_custom_models()
         else:
             bridge_data = BridgeDataLoader.load_from_env_vars(
                 horde_model_reference_manager=horde_model_reference_manager,
@@ -80,10 +81,35 @@ def download_all_models(
         if SharedModelManager.manager.controlnet is None:
             logger.error("Failed to load controlnet model manager")
             exit(1)
-        SharedModelManager.manager.controlnet.download_all_models()
+        for cn_model in SharedModelManager.manager.controlnet.model_reference:
+            if (
+                cn_model not in SharedModelManager.manager.controlnet.available_models
+                and "sdxl" in cn_model.lower()
+                and not bridge_data.allow_sdxl_controlnet
+            ):
+                logger.warning(f"Skipping download of {cn_model} because `allow_sdxl_controlnet` is false.")
+                continue
+
+            SharedModelManager.manager.controlnet.download_model(cn_model)
+            SharedModelManager.manager.controlnet.download_model(cn_model)
         if not SharedModelManager.preload_annotators():
             logger.error("Failed to download the controlnet annotators")
             exit(1)
+
+    if bridge_data.allow_sdxl_controlnet:
+        if SharedModelManager.manager.miscellaneous is None:
+            logger.error("Failed to load miscellaneous model manager")
+            exit(1)
+        SharedModelManager.manager.miscellaneous.download_all_models()
+        SharedModelManager.manager.miscellaneous.download_all_models()
+        for model in SharedModelManager.manager.miscellaneous.model_reference:
+            if not SharedModelManager.manager.miscellaneous.validate_model(
+                model,
+            ) and not SharedModelManager.manager.miscellaneous.download_model(model):
+                logger.error(f"Failed to download model {model}")
+                exit(1)
+        else:
+            logger.success("Downloaded all Miscellaneous models")
 
     if bridge_data.allow_post_processing:
         if SharedModelManager.manager.gfpgan is None:
@@ -97,6 +123,7 @@ def download_all_models(
             exit(1)
 
         SharedModelManager.manager.gfpgan.download_all_models()
+        SharedModelManager.manager.gfpgan.download_all_models()
         for model in SharedModelManager.manager.gfpgan.model_reference:
             if not SharedModelManager.manager.gfpgan.validate_model(
                 model,
@@ -107,6 +134,7 @@ def download_all_models(
             logger.success("Downloaded all GFPGAN models")
 
         SharedModelManager.manager.esrgan.download_all_models()
+        SharedModelManager.manager.esrgan.download_all_models()
         for model in SharedModelManager.manager.esrgan.model_reference:
             if not SharedModelManager.manager.esrgan.validate_model(
                 model,
@@ -116,6 +144,7 @@ def download_all_models(
         else:
             logger.success("Downloaded all ESRGAN models")
 
+        SharedModelManager.manager.codeformer.download_all_models()
         SharedModelManager.manager.codeformer.download_all_models()
         for model in SharedModelManager.manager.codeformer.model_reference:
             if not SharedModelManager.manager.codeformer.validate_model(

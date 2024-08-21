@@ -100,6 +100,11 @@ allow_post_processing: true
 # Note: There is additional RAM/VRAM overhead with this option. Low VRAM cards (<6gb) should be cautious to enable this.
 allow_controlnet: false
 
+# Allow SDXL jobs with high memory add-ons like controlnet or transparency to be done by this worker.
+# Note: There is significant additional RAM/VRAM overhead with this option. Medium VRAM cards (<12gb) should be cautious to enable this.
+# Note that if this is true, allow_controlnet must also be true
+allow_sdxl_controlnet: false
+
 # Allow LoRas to be used. This requires that you have a fast internet connection.
 # LoRas will be downloaded on demand. `max_lora_cache_size` controls how many gigabytes you will keep downloaded.
 # 5gb of preselected LoRas are always downloaded the first time you start the worker with this setting.
@@ -150,7 +155,7 @@ disable_disk_cache: false # Currently unused in reGen
 # Instead of a model name you may use of any of the following magic constants:
 #   "ALL"  - means load all possible models. Expect this to take over 1TB of space!
 #   "TOP n"  - load the top "N" most popular models, use for example, "top 5" or "top 3", etc.
-#   "BOTTOM n"  - load the top "N" most popular models, use for example, "top 5" or "top 3", etc.
+#   "BOTTOM n"  - load the bottom "N" models (i.e., the least popular N models) use for example, "bottom 5" or "bottom 3", etc.
 #   (not currently supported) "ALL <style> MODELS"  -  For example, "all anime models", styles are: generalist, artistic, realistic, anime, furry, other
 #   (not currently supported) "ALL SFW MODELS"  -  All models marked as being SFW
 #   (not currently supported) "ALL NSFW MODELS"  -  All models marked as being NSFW

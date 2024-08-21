@@ -30,13 +30,13 @@
   - If you had previously set `cache_home`, set it to what you were using before.
 
 ### Setup venv
-- `python -m venv regen`
+- `python -m venv regen` (only needed the first time you follow these instructions)
   - (certain windows setups) `py -3.11 -m venv regen`
 - (windows) `regen\Scripts\activate.bat` for cmd or `regen\Scripts\Activate.ps1` for power shell
 - (linux) `source regen/bin/activate`
 - **Important**: You should now see `(regen)` prepended in your shell. If you do not, try again or ask for help.
 
-### Get worker beta
+### Get worker files and install dependencies
 - `git clone https://github.com/Haidra-Org/horde-worker-reGen.git`
 - `cd .\horde-worker-reGen\`
 - `pip install -r requirements.txt --extra-index-url https://download.pytorch.org/whl/cu121`
@@ -48,6 +48,10 @@
 - `python run_worker.py` (to start working)
 
 Pressing control-c will have the worker complete any jobs in progress before ending. Please try and avoid hard killing it unless you are seeing many major errors. You can force kill by repeatedly pressing control-c or doing a SIGKILL.
+
+### Important note if manually manage your venvs
+- If you manually manage your venvs you should be running `python -m pip install -r requirements.txt -U` everytime you `git pull`.
+- `hordelib` has been renamed on pypi to `horde-engine`. The worker will no longer start if `hordelib` is installed. You must manually run `python -m pip uninstall hordelib -y` to be sure hordelib is uninstalled.
 
 ## Advanced users, container install
 
