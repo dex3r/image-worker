@@ -55,7 +55,7 @@ This option is recommended as it will make keeping your repository up to date mu
       - `cd /d G:\horde`
 3. Run the following commands within the folder chosen (the folder `horde` if using the example above)
     ```bash
-    git clone https://github.com/Haidra-Org/horde-worker-reGen.git
+    git clone https://github.com/AIPoweGrid/image-worker
     cd horde-worker-reGen
     ```
 4. Continue with the [Basic Usage](#Basic-Usage) instructions
@@ -75,7 +75,7 @@ This assumes you have git installed
 Open a bash terminal and run these commands (just copy-paste them all together)
 
 ```bash
-git clone [https://github.com/Haidra-Org/horde-worker-reGen.git](https://github.com/AIPowerGrid/image-worker)
+git clone https://github.com/AIPowerGrid/image-worker
 cd image-worker
 ```
 
