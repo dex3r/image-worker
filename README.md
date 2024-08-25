@@ -29,7 +29,7 @@ If you are willing to try with your AMD card, join the [discord discussion]([htt
 
 **Please see the prior section before proceeding.**
 
-If you haven't already, go to the [grid registratin page and obtain an API key](https://api.aipowergrid.io/register), then store your API key somewhere secure. Treat your API key like a password. You will need it later in these instructions. This will allow your worker to gather kudos for your account.
+If you haven't already, go to the [grid registration page and obtain an API key](https://api.aipowergrid.io/register), then store your API key somewhere secure. Treat your API key like a password. You will need it later in these instructions. This will allow your worker to gather kudos for your account.
 
 
 ### Windows
