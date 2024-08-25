@@ -1,7 +1,7 @@
 This repository allows you to set up a grid **image worker** to generate, post-process or analyze images for others
 
 
-If you want the latest information or have questions, come to [the Discord server]([https://discord.com/channels/781145214752129095/1076124012305993768](https://discord.gg/UW5pgT5kZx))
+If you want the latest information or have questions, come to [the Discord server](https://discord.com/channels/781145214752129095/1076124012305993768](https://discord.gg/UW5pgT5kZx)
 
 
 ## Important Info
