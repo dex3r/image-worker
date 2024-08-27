@@ -131,6 +131,19 @@ class reGenBridgeData(CombinedHordeBridgeData):
 
         return self
 
+    @field_validator("dreamer_worker_name", mode="after")
+    def validate_dreamer_worker_name(cls, value: str) -> str:
+        """Apply the environment variable override for the `dreamer_worker_name` field."""
+        AIWORKER_DREAMER_WORKER_NAME = os.getenv("AIWORKER_DREAMER_WORKER_NAME")
+        if AIWORKER_DREAMER_WORKER_NAME:
+            logger.warning(
+                "AIWORKER_DREAMER_WORKER_NAME environment variable is set. This will override the value for "
+                "`dreamer_worker_name` in the config file.",
+            )
+            return AIWORKER_DREAMER_WORKER_NAME
+
+        return value
+
     def prepare_custom_models(self) -> None:
         """Prepare the custom models."""
         if os.getenv("HORDELIB_CUSTOM_MODELS"):
