@@ -7,7 +7,7 @@ import os
 
 from horde_sdk.ai_horde_worker.bridge_data import CombinedHordeBridgeData
 from loguru import logger
-from pydantic import Field, model_validator
+from pydantic import Field, field_validator, model_validator
 from ruamel.yaml import YAML
 
 from horde_worker_regen.consts import TOTAL_LORA_DOWNLOAD_TIMEOUT
