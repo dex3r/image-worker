@@ -156,19 +156,26 @@ disable_disk_cache: false # Currently unused in reGen
 #   "ALL"  - means load all possible models. Expect this to take over 1TB of space!
 #   "TOP n"  - load the top "N" most popular models, use for example, "top 5" or "top 3", etc.
 #   "BOTTOM n"  - load the bottom "N" models (i.e., the least popular N models) use for example, "bottom 5" or "bottom 3", etc.
+#
+#   "ALL SD15 MODELS" - All Stable Diffusion 1.5 models
+#   "ALL SD21 MODELS" - All Stable Diffusion 2.0/2.1 models
+#   "ALL SDXL MODELS" - All Stable Diffusion XL models
+#   "ALL INPAINTING MODELS"  -  All models marked as being for inpainting
+#
+#   "ALL SFW MODELS"  -  All models marked as being SFW
+#   "ALL NSFW MODELS"  -  All models marked as being NSFW
+#
 #   (not currently supported) "ALL <style> MODELS"  -  For example, "all anime models", styles are: generalist, artistic, realistic, anime, furry, other
-#   (not currently supported) "ALL SFW MODELS"  -  All models marked as being SFW
-#   (not currently supported) "ALL NSFW MODELS"  -  All models marked as being NSFW
 #
 # The official model reference is (in json format) found at https://github.com/Haidra-Org/AI-Horde-image-model-reference/blob/main/stable_diffusion.json.
 # Several front ends also a list of model names.
 # The model name must match the name in the model reference, or be a magic constant.
 #
 models_to_load:
-  #- "top 2"
+  - "AIPG_RED"
   - "Juggernaut XL"
   #- "TOP 2"
-  - "Juggernaut XL"
+  #- "ALL SFW"
   #- "stable_diffusion_2.1"
   #- "stable_diffusion"
   #- "Anything Diffusion"
