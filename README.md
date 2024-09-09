@@ -1,12 +1,8 @@
-This repository allows you to set up a AIPG Grid Worker to generate, post-process or analyze images for others
+This repository allows you to set up a grid **image worker** to generate, post-process or analyze images for others
 
 
-If you want the latest information or have questions, come to [the #local-workers channel in discord](https://discord.com/channels/781145214752129095/1076124012305993768)
+If you want the latest information or have questions, come to the [AI Power Grid Discord server](https://discord.gg/UW5pgT5kZx)
 
-
-# AIPG Grid Worker reGen
-
-This repo contains the latest implementation for the [AIPG Grid](https://api.aipowergrid.io) Worker. This will turn your graphics card(s) into a worker for the AIPG Grid where you will create images for others. You you will receive in turn earn 'kudos' which will give you priority for your own generations.
 
 ## Important Info
 
@@ -27,13 +23,13 @@ This repo contains the latest implementation for the [AIPG Grid](https://api.aip
 
 > Update: **AMD** now has been shown to have better support but for **linux machines only** - linux must be installed on the bare metal machine; windows systems, WSL or linux containers still do not work. You can now follow this guide using  `horde-bridge-rocm.sh` and `update-runtime-rocm.sh` where appropriate.
 
-If you are willing to try with your AMD card, join the [discord discussion](https://discord.com/channels/781145214752129095/1076124012305993768).
+If you are willing to try with your AMD card, join the [discord discussion]([https://discord.com/channels/781145214752129095/1076124012305993768](https://discord.gg/UW5pgT5kZx)).
 
 # Installing
 
 **Please see the prior section before proceeding.**
 
-If you haven't already, go to [AIPG Grid and register an account](https://api.aipowergrid.io/register), then store your API key somewhere secure. Treat your API key like a password. You will need it later in these instructions. This will allow your worker to gather kudos for your account.
+If you haven't already, go to the [grid registration page and obtain an API key](https://api.aipowergrid.io/register), then store your API key somewhere secure. Treat your API key like a password. You will need it later in these instructions. This will allow your worker to gather kudos for your account.
 
 
 ### Windows
@@ -59,7 +55,7 @@ This option is recommended as it will make keeping your repository up to date mu
       - `cd /d G:\horde`
 3. Run the following commands within the folder chosen (the folder `horde` if using the example above)
     ```bash
-    git clone https://github.com/Haidra-Org/horde-worker-reGen.git
+    git clone https://github.com/AIPoweGrid/image-worker
     cd horde-worker-reGen
     ```
 4. Continue with the [Basic Usage](#Basic-Usage) instructions
@@ -68,7 +64,7 @@ This option is recommended as it will make keeping your repository up to date mu
 
 Use these instructions if you do not have git for windows and do not want to install it. These instructions make updating the worker a bit more difficult down the line.
 
-1. Download [the zipped version](https://github.com/Haidra-Org/horde-worker-reGen/archive/refs/heads/main.zip)
+1. Download [the zipped version](https://github.com/AIPowerGrid/image-worker/archive/refs/heads/main.zip)
 1. Extract it to any folder of your choice
 1. Continue with the [Basic Usage](#Basic-Usage) instructions
 
@@ -79,8 +75,8 @@ This assumes you have git installed
 Open a bash terminal and run these commands (just copy-paste them all together)
 
 ```bash
-git clone https://github.com/Haidra-Org/horde-worker-reGen.git
-cd horde-worker-reGen
+git clone https://github.com/AIPowerGrid/image-worker
+cd image-worker
 ```
 
 Continue with the [Basic Usage](#Basic-Usage) instructions
@@ -136,7 +132,7 @@ etc
 
 ## Updating
 
-The AIPG Grid workers are under constant improvement. You can follow progress [in our discord](https://discord.gg/3DxrhksKzn) and get notifications about updates there. If you are interested in receiving notifications for worker updates or betas, go to the [#get-roles channel](https://discord.com/channels/781145214752129095/977498954616954890) and get the appropriate role(s).
+The grid workers are under constant improvement. You can follow progress [in our discord](https://discord.gg/3DxrhksKzn) and get notifications about updates there. If you are interested in receiving notifications for worker updates or betas, go to the [#get-roles channel](https://discord.com/channels/781145214752129095/977498954616954890) and get the appropriate role(s).
 
 To update:
 
@@ -148,7 +144,7 @@ To update:
     Use this approach if you cloned the original repository using `git clone`
 
     1. Open a or `bash`, `cmd`, or `powershell` terminal depending on your OS
-    2. Navigate to the folder you have the AIPG Grid Worker repository installed if you're not already there.
+    2. Navigate to the folder you have the grid Worker repository installed if you're not already there.
     3. run `git pull`
 
     ### zip method
@@ -157,8 +153,8 @@ To update:
 
 
     1. delete the `horde_worker_regen/` directory from your folder
-    1. Download the [repository from github as a zip file](https://github.com/db0/horde-worker-reGen/archive/refs/heads/main.zip)
-    1. Extract its contents into the same the folder you have the AIPG Grid Worker repository installed, overwriting any existing files
+    1. Download the [repository from github as a zip file](https://github.com/AIPowerGrid/image-worker/archive/refs/heads/main.zip)
+    1. Extract its contents into the same the folder you have the grid Worker repository installed, overwriting any existing files
 
 1. Run the `update-runtime` script for your OS. This will update all dependencies if required.
    - Some updates may not require this and the update notification will tell you if this is the case.

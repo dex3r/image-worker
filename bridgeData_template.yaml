@@ -1,17 +1,17 @@
 ## Common for all worker Types
 
-# The horde url
-horde_url: "https://api.aipowergrid.io"
+# The grid url
+horde_url: "https://api.aipowergrid.io/api"
 
-# The api_key identifies a unique user in the horde
-# Visit https://api.aipowergrid.io to create one before you can join
+# The api_key identifies a unique user on the grid
+# Visit https://api.aipowergrid.io/register to create one before you can join
 api_key: "Please set your API key - https://api.aipowergrid.io/register"
 
 # Put other users whose prompts you want to prioritize.
 # The owner's username is always included so you don't need to add it here if you use the key specified in `api_key` for requests
 priority_usernames: []
 
-# The amount of parallel jobs to pick up for the horde.
+# The amount of parallel jobs to pick up for the grid.
 # Only high end cards (e.g, 3080 or better) benefit from this setting.
 # If you have a 20xx or earlier, or a xx60/xx70, do not change this setting from 1.
 max_threads: 1
@@ -22,11 +22,11 @@ queue_size: 1
 
 # This will try to pull these many jobs per request and perform batched inference.
 # This is way more optimized than doing them 1 by 1, but is slower.
-# Keep in mind, that the horde will not give your max batch at your max resolution
+# Keep in mind, that the grid will not give your max batch at your max resolution
 # In order to avoid running out of VRAM.
-# The Horde will assume you can fulfil your max batch at HALF you max resolution.
+# The grid will assume you can fulfil your max batch at HALF you max resolution.
 # So make sure you can generate your max_batch @ max_power/2
-# Over your half max_power, AI Horde will smartly assign only as much batches
+# Over your half max_power, the grid will smartly assign only as much batches
 # as it calculates you can achieve. If you start running out of VRAM, reduce
 # max_power or max_batch.
 max_batch: 1
@@ -68,7 +68,7 @@ dreamer_name: "Please set the name of your Worker"
 #       50 = 1280x1280
 #       ...
 
-max_power: 50
+max_power: 32
 
 # A list of words which you do not want to your worker to accept if they are in the prompt
 blacklist: []
@@ -166,8 +166,8 @@ disable_disk_cache: false # Currently unused in reGen
 #
 models_to_load:
   #- "top 2"
-  #- "ALL MODELS"
-  #- "TOP 3"
+  - "Juggernaut XL"
+  #- "TOP 2"
   - "Juggernaut XL"
   #- "stable_diffusion_2.1"
   #- "stable_diffusion"
@@ -219,7 +219,7 @@ max_length: 80
 # The max tokens to use from the prompt
 max_context_length: 1024
 
-# When set to true, the horde alias behind the API key will be appended to the model that is advertised to the horde
+# When set to true, the grid alias behind the API key will be appended to the model that is advertised to the grid
 # This will prevent the model from being used from the shared pool, but will ensure that no other worker
 # can pretend to serve it
 branded_model: true
