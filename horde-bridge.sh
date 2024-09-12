@@ -37,6 +37,7 @@ if [ -z "$LD_PRELOAD" ]; then
     fi
 fi
 
+./runtime.sh python update_path_consts.py
 
 if ./runtime.sh python -s download_models.py; then
     echo "Model Download OK. Starting worker..."
